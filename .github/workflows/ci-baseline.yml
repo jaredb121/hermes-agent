@@ -1,0 +1,71 @@
+name: CI Baseline
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-baseline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ruff:
+    name: Ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Run Ruff
+        run: uvx --from ruff==0.15.10 ruff check .
+
+  focused-unit-tests:
+    name: Focused unit tests (Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HERMES_DISABLE_LAZY_INSTALLS: "1"
+      OPENAI_API_KEY: ""
+      OPENROUTER_API_KEY: ""
+      NOUS_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install Python and test dependencies
+        run: uv sync --locked --python 3.11 --extra dev
+
+      - name: Run focused unit tests
+        shell: bash
+        run: |
+          tests=(
+            tests/hermes_cli/test_commands.py
+            tests/hermes_cli/test_commands_execute.py
+            tests/test_mcp_serve.py
+            tests/tui_gateway/test_kanban_notify_poller.py
+          )
+          if [[ -f tests/hermes_cli/test_exec_lifecycle.py ]]; then
+            tests+=(tests/hermes_cli/test_exec_lifecycle.py)
+          fi
+          HERMES_PYTHON=.venv/bin/python scripts/run_tests.sh "${tests[@]}" -q
