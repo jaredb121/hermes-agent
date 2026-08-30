@@ -959,7 +959,7 @@ class TestE2EPermissions:
 
 
 # ---------------------------------------------------------------------------
-# 4. TOOL LISTING — verify all 10 tools are registered
+# 4. TOOL LISTING — verify the channel bridge and operator tools are registered
 # ---------------------------------------------------------------------------
 
 class TestToolRegistration:
@@ -973,8 +973,17 @@ class TestToolRegistration:
             "attachments_fetch", "events_poll", "events_wait",
             "messages_send", "channels_list",
             "permissions_list_open", "permissions_respond",
+            "list_sessions", "list_boards", "list_cards", "get_run",
+            "get_review_bundle", "get_health",
         }
         assert expected == tool_names, f"Missing: {expected - tool_names}, Extra: {tool_names - expected}"
+
+    def test_operator_health_tool_returns_structured_status(self, mcp_server_e2e, _event_loop):
+        server, _ = mcp_server_e2e
+        result = _run_tool(server, "get_health")
+        assert result["status"] in {"healthy", "degraded"}
+        assert isinstance(result["boards"], list)
+        assert "state" in result["databases"]
 
     def test_tools_have_descriptions(self, mcp_server_e2e, _event_loop):
         server, _ = mcp_server_e2e

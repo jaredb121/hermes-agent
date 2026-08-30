@@ -410,6 +410,11 @@ COMMAND_REGISTRY: list[CommandDef] = [
                busy_policy="dispatch", execute="version"),
     CommandDef("debug", "Upload debug report (system info + logs) and get shareable links", "Info",
                args_hint="[nous|local]"),
+    CommandDef("ops", "Show operator status, board state, and health", "Info",
+               execute="ops_status", cli_only=True, desktop="terminal"),
+    CommandDef("work", "Show work across project boards and sessions", "Info",
+               args_hint="[filter]", execute="work_board", cli_only=True,
+               desktop="terminal"),
 
     # Exit
     CommandDef("quit", "Exit the CLI (use --delete to also remove session history)", "Exit",

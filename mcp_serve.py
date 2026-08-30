@@ -10,7 +10,7 @@ Matches OpenClaw's 9-tool MCP channel bridge surface:
   events_poll, events_wait, messages_send, permissions_list_open,
   permissions_respond
 
-Plus: channels_list (Hermes-specific extra)
+Plus: channels_list and read-only operator work/health views (Hermes-specific)
 
 Usage:
     hermes mcp serve
@@ -1018,6 +1018,203 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "MCPServer"
 
         result = bridge.respond_to_approval(id, decision)
         return json.dumps(result, indent=2)
+
+    # -- read-only operator views -----------------------------------------
+
+    @mcp.tool()
+    def list_sessions(limit: int = 20, active_only: bool = False) -> str:
+        """List Hermes sessions with normalized lifecycle state.
+
+        Args:
+            limit: Maximum sessions to return (1-100)
+            active_only: Return only running or retrying sessions
+        """
+        try:
+            from hermes_cli.exec_lifecycle import get_work_snapshot
+
+            limit = max(1, min(int(limit), 100))
+            sessions = [
+                item for item in get_work_snapshot().sorted()
+                if item.source == "session"
+            ]
+            if active_only:
+                sessions = [
+                    item for item in sessions
+                    if item.lifecycle in {"running", "retrying"}
+                ]
+            sessions = sessions[:limit]
+            return json.dumps({
+                "count": len(sessions),
+                "sessions": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "lifecycle": item.lifecycle,
+                        "profile": item.profile,
+                        "stage": item.stage,
+                        "elapsed_seconds": item.elapsed_seconds,
+                        "last_updated": item.last_updated,
+                    }
+                    for item in sessions
+                ],
+            }, indent=2)
+        except Exception as exc:
+            logger.warning("operator session listing failed: %s", exc)
+            return json.dumps({"error": str(exc), "count": 0, "sessions": []}, indent=2)
+
+    @mcp.tool()
+    def list_boards() -> str:
+        """List configured Kanban boards with task counts per state."""
+        try:
+            from hermes_cli.exec_lifecycle import list_all_boards
+
+            boards = list_all_boards()
+            return json.dumps({
+                "count": len(boards),
+                "boards": [
+                    {
+                        "board": board["slug"],
+                        "name": board.get("name", board["slug"]),
+                        "current": board.get("is_current", False),
+                        "archived": board.get("archived", False),
+                        "task_counts": board.get("counts", {}),
+                        "total_tasks": board.get("total", 0),
+                    }
+                    for board in boards
+                ],
+            }, indent=2)
+        except Exception as exc:
+            logger.warning("operator board listing failed: %s", exc)
+            return json.dumps({"error": str(exc), "count": 0, "boards": []}, indent=2)
+
+    @mcp.tool()
+    def list_cards(board: str = "", status: str = "", limit: int = 50) -> str:
+        """List Kanban cards with normalized lifecycle state.
+
+        Args:
+            board: Board slug; defaults to the current board
+            status: Optional normalized lifecycle filter
+            limit: Maximum cards to return (1-200)
+        """
+        try:
+            from hermes_cli.exec_lifecycle import get_work_snapshot, list_all_boards
+
+            limit = max(1, min(int(limit), 200))
+            boards = list_all_boards()
+            if not boards:
+                return json.dumps({"count": 0, "cards": [], "error": "No boards configured"}, indent=2)
+            board_slug = board.strip()
+            if not board_slug:
+                current = next((item for item in boards if item.get("is_current")), boards[0])
+                board_slug = current["slug"]
+            valid_slugs = {item["slug"] for item in boards}
+            if board_slug not in valid_slugs:
+                return json.dumps({
+                    "count": 0,
+                    "cards": [],
+                    "error": f"Unknown board: {board_slug}",
+                }, indent=2)
+
+            cards = [
+                item for item in get_work_snapshot().sorted()
+                if item.source == "kanban" and item.board == board_slug
+            ]
+            if status:
+                cards = [item for item in cards if item.lifecycle == status]
+            cards = cards[:limit]
+            return json.dumps({
+                "count": len(cards),
+                "board": board_slug,
+                "cards": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "lifecycle": item.lifecycle,
+                        "board": item.board,
+                        "project": item.project,
+                        "assignee": item.assignee,
+                        "stage": item.stage,
+                        "stage_detail": item.stage_detail,
+                        "elapsed_seconds": item.elapsed_seconds,
+                        "heartbeat_age": item.heartbeat_age,
+                        "has_review": item.has_review,
+                        "changed_files": item.changed_files[:10],
+                        "commit": item.commit,
+                        "branch": item.branch,
+                    }
+                    for item in cards
+                ],
+            }, indent=2)
+        except Exception as exc:
+            logger.warning("operator card listing failed: %s", exc)
+            return json.dumps({"error": str(exc), "count": 0, "cards": []}, indent=2)
+
+    @mcp.tool()
+    def get_run(run_id: str, board: str = "") -> str:
+        """Get one task run from a board without changing board state.
+
+        Args:
+            run_id: Task run ID
+            board: Board slug; defaults to the current board
+        """
+        conn = None
+        try:
+            from hermes_cli.exec_lifecycle import _connect_kanban
+
+            conn = _connect_kanban(board.strip() or None)
+            if conn is None:
+                return json.dumps({"error": "Kanban database not available"})
+            row = conn.execute("SELECT * FROM task_runs WHERE id = ?", (run_id,)).fetchone()
+            if row is None:
+                return json.dumps({"error": f"Run {run_id} not found"})
+            return json.dumps(dict(row), indent=2, default=str)
+        except Exception as exc:
+            logger.warning("operator run lookup failed: %s", exc)
+            return json.dumps({"error": str(exc)}, indent=2)
+        finally:
+            if conn is not None:
+                conn.close()
+
+    @mcp.tool()
+    def get_review_bundle(card_id: str, board: str = "") -> str:
+        """Get the structured review bundle for a work item.
+
+        Args:
+            card_id: Task or session ID
+            board: Optional board slug used to disambiguate task IDs
+        """
+        try:
+            from hermes_cli.exec_lifecycle import (
+                get_review_bundle as build_review_bundle,
+                get_work_snapshot,
+            )
+
+            matches = [
+                item for item in get_work_snapshot().items
+                if item.id == card_id and (not board or item.board == board)
+            ]
+            if not matches:
+                return json.dumps({"error": f"Work item {card_id} not found"})
+            if len(matches) > 1:
+                return json.dumps({
+                    "error": f"Work item {card_id} is ambiguous; specify board",
+                    "boards": sorted({item.board for item in matches if item.board}),
+                }, indent=2)
+            return json.dumps(build_review_bundle(matches[0]), indent=2)
+        except Exception as exc:
+            logger.warning("operator review bundle failed: %s", exc)
+            return json.dumps({"error": str(exc)}, indent=2)
+
+    @mcp.tool()
+    def get_health() -> str:
+        """Get read-only Hermes database and board health."""
+        try:
+            from hermes_cli.exec_lifecycle import get_health as build_health
+
+            return json.dumps(build_health(), indent=2)
+        except Exception as exc:
+            logger.warning("operator health lookup failed: %s", exc)
+            return json.dumps({"error": str(exc), "status": "error"}, indent=2)
 
     return mcp
 
