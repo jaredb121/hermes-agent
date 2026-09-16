@@ -26,9 +26,22 @@ SURFACES = ("cli", "gateway", "tui")
 def test_some_commands_are_migrated():
     names = {cmd.name for cmd in MIGRATED}
     # The thin-slice set — extend as more commands migrate.
-    assert {"version", "egress", "profile", "bundles", "help", "commands"} <= names
+    assert {
+        "version",
+        "egress",
+        "profile",
+        "bundles",
+        "help",
+        "commands",
+        "ops",
+        "work",
+    } <= names
 
 
+def test_every_migrated_command_resolves_an_executor():
+    for command in MIGRATED:
+        assert command.execute in EXECUTORS
+        assert resolve_executor(command) is EXECUTORS[command.execute]
 
 
 def test_unmigrated_commands_have_no_executor():
@@ -36,13 +49,3 @@ def test_unmigrated_commands_have_no_executor():
         if not cmd.execute:
             assert resolve_executor(cmd) is None
             assert run_execute(cmd, CommandContext()) is None
-
-
-
-
-
-
-
-
-
-

@@ -877,7 +877,8 @@ Or if you installed Hermes in a specific location:
 
 ### Available tools
 
-The MCP server exposes 10 tools, matching OpenClaw's channel bridge surface plus a Hermes-specific channel browser:
+The MCP server exposes the channel bridge surface plus Hermes-specific channel
+and read-only operator views:
 
 | Tool | Description |
 |------|-------------|
@@ -891,6 +892,16 @@ The MCP server exposes 10 tools, matching OpenClaw's channel bridge surface plus
 | `channels_list` | List available messaging targets across all platforms. |
 | `permissions_list_open` | List pending approval requests observed during this bridge session. |
 | `permissions_respond` | Allow or deny a pending approval request. |
+| `list_sessions` | List recent sessions with normalized lifecycle state. |
+| `list_boards` | List Kanban boards and task counts. |
+| `list_cards` | List cards on one board, optionally filtered by lifecycle. |
+| `get_run` | Read one task-run record from a selected board. |
+| `get_review_bundle` | Read changed files, verification evidence, revision data, and unresolved risks for one work item. |
+| `get_health` | Read database connectivity, board availability, and active-session counts. |
+
+The operator tools open SQLite in query-only mode and never create, migrate, or
+update Hermes state. They are available only to clients you explicitly connect
+to the stdio server; they are not messaging-platform commands.
 
 ### Event system
 

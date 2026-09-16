@@ -243,6 +243,142 @@ def _exec_commands(ctx: CommandContext) -> CommandReply:
 
 
 # ---------------------------------------------------------------------------
+# Operator UX executors
+# ---------------------------------------------------------------------------
+
+
+def _format_elapsed(seconds: float | None) -> str:
+    """Format elapsed seconds to a compact human string."""
+    if seconds is None or seconds < 0:
+        return "—"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    mins = int(seconds // 60)
+    if mins < 60:
+        return f"{mins}m {int(seconds % 60)}s"
+    hrs, mins = divmod(mins, 60)
+    if hrs < 24:
+        return f"{hrs}h {mins}m"
+    days, hrs = divmod(hrs, 24)
+    return f"{days}d {hrs}h"
+
+
+_LIFECYCLE_GLYPHS = {
+    "running": "▶",
+    "ready_for_review": "◆",
+    "retrying": "↻",
+    "waiting_on_you": "●",
+    "stalled": "◈",
+    "ready": "○",
+    "verified_done": "✓",
+    "failed": "✗",
+    "cancelled": "−",
+}
+
+
+def _exec_ops_status(ctx: CommandContext) -> CommandReply:
+    """Render an operator summary from the read-only lifecycle adapter."""
+    from hermes_cli.exec_lifecycle import LIFECYCLE_ORDER, get_health, get_work_snapshot
+
+    snapshot = get_work_snapshot()
+    by_lifecycle = snapshot.by_lifecycle()
+    lines = ["── Operator Status ──", ""]
+
+    for state in LIFECYCLE_ORDER:
+        items = by_lifecycle.get(state, [])
+        if items:
+            lines.append(
+                f"  {_LIFECYCLE_GLYPHS.get(state, '·')} "
+                f"{state.replace('_', ' ')}  {len(items)}"
+            )
+    lines.append(f"  Total: {len(snapshot.items)} work items")
+
+    sections = (
+        ("Currently running:", by_lifecycle.get("running", [])),
+        ("Ready for review:", by_lifecycle.get("ready_for_review", [])),
+        (
+            "Stalled / waiting on you:",
+            by_lifecycle.get("stalled", []) + by_lifecycle.get("waiting_on_you", []),
+        ),
+    )
+    for heading, items in sections:
+        if not items:
+            continue
+        lines.extend(("", heading))
+        for item in items[:5]:
+            glyph = _LIFECYCLE_GLYPHS.get(item.lifecycle, "·")
+            board = f" [{item.project or item.board}]" if (item.project or item.board) else ""
+            stage = f" · {item.stage}" if item.stage else ""
+            detail = f" {item.stage_detail}" if item.stage_detail else ""
+            lines.append(
+                f"  {glyph} {item.title}{board} ({_format_elapsed(item.elapsed_seconds)})"
+                f"{stage}{detail}"
+            )
+
+    health = get_health()
+    lines.extend(("", f"Health: {health['status']}"))
+    for board in health["boards"]:
+        marker = "●" if board.get("current") else " "
+        counts = board.get("task_counts", {})
+        count_text = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "(empty)"
+        archived = " [archived]" if board.get("archived") else ""
+        lines.append(f"  {marker} {board['slug']}{archived}: {count_text}")
+    lines.append(f"  sessions: {health['active_sessions']}")
+    return CommandReply("\n".join(lines))
+
+
+def _exec_work_board(ctx: CommandContext) -> CommandReply:
+    """Render work across every board and the session store."""
+    from hermes_cli.exec_lifecycle import get_work_snapshot
+
+    query = (ctx.args or "").strip().casefold()
+    items = get_work_snapshot().sorted()
+    if query:
+        items = [
+            item for item in items
+            if any(
+                query in (value or "").casefold()
+                for value in (
+                    item.title,
+                    item.lifecycle,
+                    item.project,
+                    item.board,
+                    item.assignee,
+                    item.profile,
+                )
+            )
+        ]
+
+    lines = [f"── All Work ({len(items)} items) ──", ""]
+    if not items:
+        lines.append("  No work items found.")
+        return CommandReply("\n".join(lines))
+
+    for item in items:
+        glyph = _LIFECYCLE_GLYPHS.get(item.lifecycle, "·")
+        scope = item.project or item.board
+        scope_text = f" {scope}" if scope else ""
+        owner = item.assignee or (item.profile if item.source == "session" else None)
+        owner_text = f" {owner}" if owner else ""
+        stage = f" · {item.stage}" if item.stage else ""
+        detail = f" {item.stage_detail}" if item.stage_detail else ""
+        lines.append(f"  {glyph} {item.title} [{item.source}]{scope_text}{owner_text}")
+        lines.append(
+            f"    {item.lifecycle.replace('_', ' ')}{stage}{detail} · "
+            f"{_format_elapsed(item.elapsed_seconds)}"
+        )
+        if item.heartbeat_age is not None and item.heartbeat_age > 120:
+            lines.append(f"    last heartbeat {_format_elapsed(item.heartbeat_age)} ago")
+        if item.changed_files:
+            preview = ", ".join(item.changed_files[:3])
+            lines.append(f"    files: {preview}{'…' if len(item.changed_files) > 3 else ''}")
+        if item.has_review:
+            lines.append("    ◆ review bundle available")
+
+    return CommandReply("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
 # Registry + resolution
 # ---------------------------------------------------------------------------
 
@@ -253,6 +389,8 @@ EXECUTORS: dict[str, Callable[[CommandContext], CommandReply]] = {
     "bundles": _exec_bundles,
     "gateway_help": _exec_help,
     "gateway_commands": _exec_commands,
+    "ops_status": _exec_ops_status,
+    "work_board": _exec_work_board,
 }
 
 

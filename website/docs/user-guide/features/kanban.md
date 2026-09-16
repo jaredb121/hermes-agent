@@ -845,6 +845,28 @@ hermes kanban swarm "Design a multi-region failover plan" \
 
 The resulting graph is committed atomically: dispatchers and dashboard readers see either no new swarm or the complete topology, never a partially linked root/worker/verifier graph. It then dispatches normally — workers run in parallel, the verifier wakes after they all finish, and the synthesizer wakes after the verifier marks the work clean.
 
+## Operator overview
+
+The interactive CLI and TUI provide two read-only views across the board and
+session stores:
+
+```text
+/ops                # lifecycle counts, active/review/stalled work, board health
+/work               # every active card and recent session
+/work review         # filter by title, lifecycle, project, board, assignee, or profile
+```
+
+The adapter distinguishes `ready_for_review` from `verified_done`: an ended
+session is reviewable, while only a Kanban task explicitly persisted as `done`
+is considered verified. Running cards with stale heartbeats appear as
+`stalled`, and blocked cards appear as `waiting_on_you`.
+
+These commands are intentionally local-only because their output can include
+private project and session metadata. They do not appear as Telegram, Discord,
+Slack, or other gateway commands. MCP clients configured through
+`hermes mcp serve` can access equivalent query-only tools; see
+[Running Hermes as an MCP server](./mcp.md#running-hermes-as-an-mcp-server).
+
 ## `/kanban` slash command {#kanban-slash-command}
 
 Every `hermes kanban <action>` verb is also reachable as `/kanban <action>` — from inside an interactive `hermes chat` session **and** from any gateway platform (Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Mattermost, email, SMS). Both surfaces call the exact same `hermes_cli.kanban.run_slash()` entry point that reuses the `hermes kanban` argparse tree, so the argument surface, flags, and output format are identical across CLI, `/kanban`, and `hermes kanban`. You don't have to leave the chat to drive the board.
