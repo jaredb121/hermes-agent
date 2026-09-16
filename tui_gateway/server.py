@@ -11879,12 +11879,20 @@ def _format_kanban_event_text(sub: dict, task, ev, board_slug: str) -> Optional[
     if kind == "crashed":
         return f"✖ {board_tag}{tag}Kanban {task_id} worker crashed (pid gone); dispatcher will retry"
     if kind == "timed_out":
+        # Runtime deadlines carry ``limit_seconds``. Budget/cooldown failures
+        # can use the same terminal event with only an ``error`` string; do
+        # not present those as the misleading "max_runtime=0s".
         limit = 0
         try:
             limit = int(payload.get("limit_seconds") or 0)
         except (TypeError, ValueError):
             pass
-        return f"⏱ {board_tag}{tag}Kanban {task_id} timed out (max_runtime={limit}s); will retry"
+        if limit > 0:
+            return f"⏱ {board_tag}{tag}Kanban {task_id} timed out (max_runtime={limit}s); will retry"
+        error = str(payload.get("error") or "").strip()
+        if error:
+            return f"⏱ {board_tag}{tag}Kanban {task_id} timed out — {error[:140]}; will retry"
+        return f"⏱ {board_tag}{tag}Kanban {task_id} timed out; will retry"
     if kind == "status":
         return f"🔄 {board_tag}{tag}Kanban {task_id} → {payload.get('status') or ''}"
     return None

@@ -261,6 +261,21 @@ class TestFormatKanbanEventText:
         ev = SimpleNamespace(kind="timed_out", payload={"limit_seconds": "not-a-number"})
         text = _format_kanban_event_text(self.SUB, self.TASK, ev, "")
         assert "timed out" in text
+        assert "max_runtime=0s" not in text
+
+    def test_timed_out_includes_positive_runtime_limit(self):
+        ev = SimpleNamespace(kind="timed_out", payload={"limit_seconds": 300})
+        text = _format_kanban_event_text(self.SUB, self.TASK, ev, "")
+        assert "max_runtime=300s" in text
+
+    def test_timed_out_without_runtime_limit_uses_error(self):
+        ev = SimpleNamespace(
+            kind="timed_out",
+            payload={"error": "iteration budget exhausted"},
+        )
+        text = _format_kanban_event_text(self.SUB, self.TASK, ev, "")
+        assert "iteration budget exhausted" in text
+        assert "max_runtime" not in text
 
 
 class TestNotificationPollerLoopKanbanWiring:
