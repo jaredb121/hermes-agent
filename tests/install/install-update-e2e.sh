@@ -102,6 +102,11 @@ collect_sandbox_logs() {
   [ -d "$src" ] || return 0
   mkdir -p "$dest"
   cp -a "$src/." "$dest/" 2>/dev/null || true
+  # Older installers silence npm output. Preserve its own diagnostics before
+  # the disposable HOME is removed, so registry/TLS/build failures are visible.
+  if [ -d "$SANDBOX_ROOT/home/.npm/_logs" ]; then
+    cp -a "$SANDBOX_ROOT/home/.npm/_logs" "$dest/npm" 2>/dev/null || true
+  fi
   # Print it, not just archive it: a rejected TLS handshake here is the whole
   # explanation for a failure that otherwise reads as a bare `curl: (35)`, and
   # whoever is reading the job log should not have to download an artifact to
