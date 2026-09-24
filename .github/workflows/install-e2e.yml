@@ -7,7 +7,8 @@ name: Install & Update E2E
 # scripts/dev-sandbox.sh, then applies one update route and requires the
 # checkout to land on this commit with a working `hermes`.
 #
-# The starting versions are chosen at runtime from upstream release tags
+# The starting versions are chosen from upstream release tags in this commit's
+# history, so a fork behind upstream tests upgrades rather than downgrades
 # (scripts/sandbox/pick-release-tags.sh): newest, oldest, and a spread between.
 # A hardcoded list would stop covering the newest release the day after it
 # ships, and would pin an "oldest" that nobody still runs.
@@ -63,10 +64,12 @@ jobs:
     outputs:
       tags: ${{ steps.pick.outputs.tags }}
     steps:
-      # Run the picker from the commit under test. Forks need not mirror tags.
+      # Full commit history is needed to exclude releases newer than this fork.
+      # Keep blobs filtered; forks need not mirror upstream release tags.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           filter: blob:none
+          fetch-depth: 0
           sparse-checkout: scripts/sandbox/pick-release-tags.sh
           sparse-checkout-cone-mode: false
       - id: pick
@@ -74,14 +77,12 @@ jobs:
           TAG_COUNT: ${{ inputs.tag-count || 5 }}
         run: |
           set -euo pipefail
-          # Match the release source used by dev-sandbox.sh, while the E2E
-          # update target remains this workflow's checkout and commit.
-          release_repo="$(mktemp -d "$RUNNER_TEMP/release-tags.XXXXXX")"
-          git -C "$release_repo" init -q
-          git -C "$release_repo" fetch --quiet --depth=1 --filter=blob:none \
+          # Match dev-sandbox.sh's release source, but only select ancestors
+          # of the update target. Newer upstream releases cannot upgrade to it.
+          git fetch --quiet --filter=blob:none \
             https://github.com/NousResearch/hermes-agent.git \
             'refs/tags/v*:refs/tags/v*'
-          tags="$(scripts/sandbox/pick-release-tags.sh --repo "$release_repo" --count "$TAG_COUNT")"
+          tags="$(scripts/sandbox/pick-release-tags.sh --merged HEAD --count "$TAG_COUNT")"
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
