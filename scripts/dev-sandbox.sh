@@ -444,6 +444,10 @@ if [ ! -f "$SANDBOX_ROOT/root/certs/ca.pem" ]; then
     exit 1
   fi
 fi
+# Node/npm use their own trust store. Keep the real roots and add the
+# throwaway CA used by the sandbox's HTTPS proxy.
+cat "$SANDBOX_ROOT/root/certs/real-ca.pem" "$SANDBOX_ROOT/root/certs/ca.pem" \
+  > "$SANDBOX_ROOT/root/certs/node-ca.pem"
 GIT_UPLOAD_PACK="$(command -v git-upload-pack)"
 sed "s|@GIT_UPLOAD_PACK@|$GIT_UPLOAD_PACK|" "$SANDBOX_ASSETS/ssh-shim.sh" \
   > "$SANDBOX_ROOT/root/usr/bin/ssh"
