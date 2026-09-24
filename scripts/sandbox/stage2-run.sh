@@ -48,6 +48,9 @@ fi
 home_mounts+=(--bind "$DEV_SANDBOX_ROOT/home" "$DEV_SANDBOX_HOME")
 
 node_env=()
+# Serialize native lifecycle builds against the shared cold header cache and
+# retain compiler output instead of npm's otherwise-silent background scripts.
+node_env+=(--setenv npm_config_foreground_scripts true)
 if [ -n "${DEV_SANDBOX_NODE_DIR:-}" ]; then
   node_env+=(--setenv npm_config_nodedir "$DEV_SANDBOX_NODE_DIR")
 fi

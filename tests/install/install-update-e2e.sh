@@ -107,10 +107,6 @@ collect_sandbox_logs() {
   if [ -d "$SANDBOX_ROOT/home/.npm/_logs" ]; then
     cp -a "$SANDBOX_ROOT/home/.npm/_logs" "$dest/npm" 2>/dev/null || true
   fi
-  if [ -f "$SANDBOX_ROOT/home/.hermes/hermes-agent/package.json" ]; then
-    in_sandbox "cd $INSTALL_DIR && npm install --foreground-scripts --loglevel verbose" \
-      >"$dest/npm-build.log" 2>&1 || true
-  fi
   # Print it, not just archive it: a rejected TLS handshake here is the whole
   # explanation for a failure that otherwise reads as a bare `curl: (35)`, and
   # whoever is reading the job log should not have to download an artifact to
