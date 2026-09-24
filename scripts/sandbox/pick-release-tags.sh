@@ -13,11 +13,12 @@
 # between (config-schema bumps, venv layout changes, dependency floors).
 #
 # Usage:
-#   scripts/sandbox/pick-release-tags.sh [--count N] [--repo DIR]
+#   scripts/sandbox/pick-release-tags.sh [--count N] [--repo DIR] [--merged REF]
 #
 #   --count   how many tags to emit (default 5, minimum 1). Fewer tags than
 #             requested emits all of them.
 #   --repo    repository to read tags from (default: this checkout).
+#   --merged  only releases reachable from REF (requires full commit history).
 #
 # Reads tags from the local checkout, so it needs one fetched with tags
 # (actions/checkout with fetch-depth: 0, or `fetch-tags: true`). A shallow
@@ -30,6 +31,7 @@
 set -euo pipefail
 
 COUNT=5
+MERGED=()
 # Default to the repository containing this script, resolved through its real
 # path so a symlinked or copied script still reads the checkout it lives in
 # rather than whatever repo the caller happens to be standing in.
@@ -42,6 +44,9 @@ while [ "$#" -gt 0 ]; do
     --repo)
       [ "$#" -ge 2 ] || { echo 'error: --repo needs a value' >&2; exit 1; }
       REPO="$2"; shift 2 ;;
+    --merged)
+      [ "$#" -ge 2 ] || { echo 'error: --merged needs a value' >&2; exit 1; }
+      MERGED=(--merged "$2"); shift 2 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -67,7 +72,7 @@ fi
 # sort -V orders v2026.4.8 before v2026.4.13 (numeric), which a plain
 # lexicographic sort gets wrong.
 mapfile -t tags < <(
-  git -C "$REPO" tag --list 'v*' \
+  git -C "$REPO" tag --list 'v*' "${MERGED[@]}" \
     | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$' \
     | sort -V
 )

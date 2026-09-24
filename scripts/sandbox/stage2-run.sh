@@ -48,6 +48,9 @@ fi
 home_mounts+=(--bind "$DEV_SANDBOX_ROOT/home" "$DEV_SANDBOX_HOME")
 
 node_env=()
+# Serialize native lifecycle builds against the shared cold header cache and
+# retain compiler output instead of npm's otherwise-silent background scripts.
+node_env+=(--setenv npm_config_foreground_scripts true)
 if [ -n "${DEV_SANDBOX_NODE_DIR:-}" ]; then
   node_env+=(--setenv npm_config_nodedir "$DEV_SANDBOX_NODE_DIR")
 fi
@@ -216,7 +219,7 @@ exec bwrap \
   --setenv CURL_CA_BUNDLE /work/certs/ca.pem \
   --setenv SSL_CERT_FILE /work/certs/ca.pem \
   --setenv GIT_SSL_CAINFO /work/certs/ca.pem \
-  --setenv NODE_EXTRA_CA_CERTS /work/certs/real-ca.pem \
+  --setenv NODE_EXTRA_CA_CERTS /work/certs/node-ca.pem \
   --setenv OPENSSL_CONF /work/certs/openssl.cnf \
   --setenv HTTP_PROXY http://127.0.0.1:8080 \
   --setenv HTTPS_PROXY http://127.0.0.1:8080 \

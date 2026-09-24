@@ -102,6 +102,11 @@ collect_sandbox_logs() {
   [ -d "$src" ] || return 0
   mkdir -p "$dest"
   cp -a "$src/." "$dest/" 2>/dev/null || true
+  # Older installers silence npm output. Preserve its own diagnostics before
+  # the disposable HOME is removed, so registry/TLS/build failures are visible.
+  if [ -d "$SANDBOX_ROOT/home/.npm/_logs" ]; then
+    cp -a "$SANDBOX_ROOT/home/.npm/_logs" "$dest/npm" 2>/dev/null || true
+  fi
   # Print it, not just archive it: a rejected TLS handshake here is the whole
   # explanation for a failure that otherwise reads as a bare `curl: (35)`, and
   # whoever is reading the job log should not have to download an artifact to
@@ -154,7 +159,9 @@ rm -rf -- "$SANDBOX_ROOT"
 # and argparse prints every option it accepts.
 update_supports() {
   local flag="$1"
-  in_sandbox "hermes update --help 2>&1" | grep -qF -- "$flag"
+  # Drain the producer: grep -q can cause SIGPIPE and a false negative under
+  # pipefail when the matching option appears before the end of the output.
+  in_sandbox "hermes update --help 2>&1" | grep -F -- "$flag" >/dev/null
 }
 
 # Does the installer at REF accept FLAG? Read it out of that ref's own
@@ -174,7 +181,9 @@ installer_supports() {
     git fetch -q --depth 1 "$UPSTREAM_URL" "$ref" 2>/dev/null || return 1
     script="$(git show FETCH_HEAD:scripts/install.sh 2>/dev/null)" || return 1
   }
-  printf '%s' "$script" | grep -qF -- "$flag"
+  # Installers can exceed the pipe buffer; consume the whole script so a
+  # supported flag is not reported absent because printf received SIGPIPE.
+  printf '%s' "$script" | grep -F -- "$flag" >/dev/null
 }
 
 # Run the real install one-liner inside the sandbox. `ref` non-empty installs
