@@ -486,7 +486,13 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 NODE_DIR="${DEV_SANDBOX_NODE_DIR:-}"
 if [ -z "$NODE_DIR" ] && command -v node >/dev/null; then
-  NODE_DIR="$(dirname "$(dirname "$(command -v node)")")"
+  # Only Nix's immutable runtime is mounted at the same path in the sandbox.
+  # A host prefix such as /usr/local is replaced, and the installer may use a
+  # different Node version. Let node-gyp fetch matching headers in that case.
+  node_binary="$(readlink -f "$(command -v node)")"
+  if [[ "$node_binary" == /nix/store/* ]]; then
+    NODE_DIR="$(dirname "$(dirname "$node_binary")")"
+  fi
 fi
 WAYLAND_SOCKET=""
 if [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -n "${WAYLAND_DISPLAY:-}" ] \
