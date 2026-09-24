@@ -154,7 +154,9 @@ rm -rf -- "$SANDBOX_ROOT"
 # and argparse prints every option it accepts.
 update_supports() {
   local flag="$1"
-  in_sandbox "hermes update --help 2>&1" | grep -qF -- "$flag"
+  # Drain the producer: grep -q can cause SIGPIPE and a false negative under
+  # pipefail when the matching option appears before the end of the output.
+  in_sandbox "hermes update --help 2>&1" | grep -F -- "$flag" >/dev/null
 }
 
 # Does the installer at REF accept FLAG? Read it out of that ref's own
@@ -174,7 +176,9 @@ installer_supports() {
     git fetch -q --depth 1 "$UPSTREAM_URL" "$ref" 2>/dev/null || return 1
     script="$(git show FETCH_HEAD:scripts/install.sh 2>/dev/null)" || return 1
   }
-  printf '%s' "$script" | grep -qF -- "$flag"
+  # Installers can exceed the pipe buffer; consume the whole script so a
+  # supported flag is not reported absent because printf received SIGPIPE.
+  printf '%s' "$script" | grep -F -- "$flag" >/dev/null
 }
 
 # Run the real install one-liner inside the sandbox. `ref` non-empty installs
