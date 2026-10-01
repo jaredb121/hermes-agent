@@ -8,11 +8,13 @@ untracked scratch (archived first) and branches whose content is on upstream.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,7 +53,7 @@ class BranchRecord:
 
 
 def _run(cmd: list, timeout: int, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape",
                           timeout=timeout, cwd=cwd)
 
 
@@ -88,14 +90,16 @@ def _tree_size_mb(path: Path, timeout: int = 30) -> Optional[int]:
 
 
 def _dirty_split(path: str) -> tuple[bool, List[str]]:
-    """(has_tracked_modifications, untracked_paths) — tracked = real work, untracked = archivable."""
+    """(has_preserved_files, untracked_paths): tracked/ignored stay; untracked is archivable."""
     try:
-        result = _git(["status", "--porcelain"], cwd=path, timeout=10)
+        result = _git(["status", "--porcelain", "-z", "--untracked-files=all", "--ignored"],
+                      cwd=path, timeout=10)
         if result.returncode != 0:
             return True, []  # fail safe: treat as real work
-        lines = [line for line in result.stdout.splitlines() if line.strip()]
-        untracked = [line[3:].strip() for line in lines if line.startswith("??")]
-        return len(untracked) != len(lines), untracked
+        # NUL records preserve literal spaces, quotes and newlines in archive paths.
+        entries = [entry for entry in result.stdout.split("\0") if entry]
+        untracked = [entry[3:] for entry in entries if entry.startswith("?? ")]
+        return len(untracked) != len(entries), untracked
     except Exception:
         return True, []
 
@@ -104,21 +108,38 @@ def _archive_untracked(tree: Path, untracked: List[str]) -> Optional[Path]:
     """Copy untracked files out of a doomed tree; None on any failure (caller must then keep)."""
     stamp = time.strftime("%Y%m%d-%H%M%S")
     from hermes_constants import get_hermes_home
-    dest = get_hermes_home() / "archive" / "worktree-prune" / f"{tree.name}-{stamp}"
     try:
+        root = get_hermes_home() / "archive" / "worktree-prune"
+        root.mkdir(parents=True, exist_ok=True)
+        # Repeated or concurrent prunes must never overwrite a previous archive.
+        dest = Path(tempfile.mkdtemp(prefix=f"{tree.name}-{stamp}-", dir=root))
         for rel in untracked:
             src = tree / rel
-            if not src.exists() or src.is_symlink():
-                continue
+            # -uall lists individual files; unsupported entries must keep the tree, not vanish.
+            if src.is_symlink() or not src.is_file():
+                return None
             (dest / rel).parent.mkdir(parents=True, exist_ok=True)
-            if src.is_dir():
-                shutil.copytree(src, dest / rel, dirs_exist_ok=True)
-            else:
-                shutil.copy2(src, dest / rel)
+            shutil.copy2(src, dest / rel)
         return dest if dest.exists() else None
     except Exception as exc:
         logger.warning("Could not archive untracked files from %s: %s", tree, exc)
         return None
+
+
+def _archive_matches(tree: Path, archive: Path, untracked: List[str]) -> bool:
+    """A pathname-only recheck misses writes to an already copied file."""
+    try:
+        for rel in untracked:
+            src, saved = tree / rel, archive / rel
+            if src.is_symlink() or not src.is_file() or saved.is_symlink():
+                return False
+            with src.open("rb") as current, saved.open("rb") as copied:
+                current_digest = hashlib.file_digest(current, "sha256").digest()
+                if current_digest != hashlib.file_digest(copied, "sha256").digest():
+                    return False
+        return True
+    except OSError:
+        return False
 
 
 def _classify_tree(_ops, repo_root: str, entry: Path, merge_cache, remote_heads) -> tuple[str, str, List[str]]:
@@ -130,7 +151,7 @@ def _classify_tree(_ops, repo_root: str, entry: Path, merge_cache, remote_heads)
         return "keep", "in use by a running hermes session", []
     tracked_dirty, untracked = _dirty_split(path)
     if tracked_dirty:
-        return "keep", "uncommitted tracked changes (real work)", []
+        return "keep", "uncommitted tracked or ignored files (preserved)", []
     archive_note = f"{len(untracked)} untracked file(s) will be archived"
     if _ops._worktree_has_unpushed_commits(path, timeout=5) and not _ops._worktree_commits_all_merged_upstream(
         path, timeout=30, cache=merge_cache, max_ahead=_MAX_CHERRY_AHEAD):
@@ -278,6 +299,7 @@ def reclaim_worktrees(
 ) -> List[str]:
     """Remove every reap-verdict tree from a frozen audit list — never re-globs inside the
     destructive loop, so trees created by concurrent sessions after the audit are out of scope."""
+    from hermes_cli import worktree_ops as _ops
     if records is None:
         records = audit_worktrees(repo_root, with_sizes=False)
     actions: List[str] = []
@@ -289,17 +311,33 @@ def reclaim_worktrees(
             continue
 
         entry = Path(record.path)
-        if record.untracked:
-            archive = _archive_untracked(entry, record.untracked)
+        if _ops._worktree_lock_is_live(repo_root, record.path, timeout=5) == "live":
+            actions.append(f"kept {record.name} (in use by a running hermes session)")
+            continue
+        preserved, untracked = _dirty_split(record.path)
+        if preserved:
+            actions.append(f"kept {record.name} (uncommitted tracked or ignored files)")
+            continue
+        archive = None
+        if untracked:
+            archive = _archive_untracked(entry, untracked)
             if archive is None:
                 actions.append(f"kept {record.name} (archive of untracked files failed)")
                 continue
-            actions.append(f"archived {len(record.untracked)} untracked file(s) → {archive}")
+            actions.append(f"archived {len(untracked)} untracked file(s) → {archive}")
 
+        if _ops._worktree_lock_is_live(repo_root, record.path, timeout=5) == "live":
+            actions.append(f"kept {record.name} (in use by a running hermes session)")
+            continue
         # Dead-pid locks must be unlocked or `remove --force` refuses.
         with contextlib.suppress(Exception):
             _git(["worktree", "unlock", record.path], cwd=repo_root, timeout=10)
         try:
+            preserved, latest_untracked = _dirty_split(record.path)
+            if (preserved or set(latest_untracked) != set(untracked)
+                    or (archive is not None and not _archive_matches(entry, archive, untracked))):
+                actions.append(f"kept {record.name} (files changed after audit/archive)")
+                continue
             remove_result = _git(["worktree", "remove", record.path, "--force"], cwd=repo_root, timeout=30)
             if remove_result.returncode != 0:
                 actions.append(f"failed to remove {record.name}: {remove_result.stderr.strip()}")

@@ -509,9 +509,11 @@ def _worktree_has_unpushed_commits(worktree_path: str, timeout: int = 10) -> boo
 
 
 def _worktree_is_dirty(worktree_path: str, timeout: int = 10) -> bool:
-    """Whether a worktree has staged/unstaged/untracked changes. Fails SAFE toward True."""
+    """Whether a tree has uncommitted or ignored files. Fails SAFE toward True."""
     try:
-        status = _git_out(["status", "--porcelain"], worktree_path, timeout=timeout)
+        # Ignored files can hold setup, evidence or secrets, even when Git calls the tree clean.
+        status = _git_out(["status", "--porcelain", "--untracked-files=all", "--ignored"],
+                          worktree_path, timeout=timeout)
         return status is None or bool(status)
     except Exception:
         return True
@@ -875,12 +877,17 @@ def _reap_prune_verdicts(repo_root: str, verdicts: list, stale_work_cutoff: floa
             logger.debug("Skipping live-locked worktree: %s", entry.name)
             continue
 
-        if lock_state == "dead":
-            _git_quiet(["worktree", "unlock", str(entry)], repo_root,
-                       log=f"Failed to unlock dead worktree {entry.name}")
-
         try:
+            if _worktree_lock_is_live(repo_root, str(entry), timeout=5) == "live":
+                continue
+            if lock_state == "dead":
+                _git_quiet(["worktree", "unlock", str(entry)], repo_root,
+                           log=f"Failed to unlock dead worktree {entry.name}")
             branch = _git(["branch", "--show-current"], str(entry), timeout=5).stdout.strip()
+            # The frozen verdict can predate new work, including files created during unlock.
+            if _worktree_is_dirty(str(entry), timeout=5):
+                preserved_stale.append(f"{entry.name} (uncommitted or ignored files)")
+                continue
             remove_result = _git(["worktree", "remove", str(entry), "--force"], repo_root, timeout=15)
             if remove_result.returncode != 0:
                 logger.debug("Failed to remove worktree %s: %s", entry.name, remove_result.stderr.strip())
