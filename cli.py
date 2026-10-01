@@ -560,6 +560,7 @@ def _reset_terminal_input_modes_on_exit() -> None:
 
 
 from hermes_cli.worktree_ops import (
+    _git,
     _git_quiet,
     _git_repo_root,
     _maintain_pack_health,
@@ -567,6 +568,7 @@ from hermes_cli.worktree_ops import (
     _repo_is_shallow,
     _setup_worktree,
     _worktree_has_unpushed_commits,
+    _worktree_is_dirty,
     release_lsp_clients,
 )
 
@@ -576,7 +578,7 @@ _active_worktree: Optional[Dict[str, str]] = None
 
 
 def _cleanup_worktree(info: Dict[str, str] = None) -> None:
-    """Remove a worktree and its branch on exit; kept only when it has unpushed commits."""
+    """Remove an unused clean tree on exit; preserve uncommitted/ignored files and commits."""
     global _active_worktree
     info = info or _active_worktree
     if not info:
@@ -597,11 +599,29 @@ def _cleanup_worktree(info: Dict[str, str] = None) -> None:
         _active_worktree = None
         return
 
+    if _worktree_is_dirty(wt_path, timeout=10):
+        logger.warning("Keeping worktree with uncommitted or ignored files: %s", wt_path)
+        _active_worktree = None
+        return
+
     # Release the tree's language servers while the path still exists, then unlock so `remove`
     # isn't blocked by the lock placed at creation. Fail-soft.
     release_lsp_clients(wt_path)
     _git_quiet(["worktree", "unlock", wt_path], repo_root, log="git worktree unlock failed (non-fatal)")
-    _git_quiet(["worktree", "remove", wt_path, "--force"], repo_root, timeout=15, log="Failed to remove worktree")
+    if _worktree_is_dirty(wt_path, timeout=10):
+        logger.warning("Keeping worktree changed during cleanup: %s", wt_path)
+        _active_worktree = None
+        return
+    try:
+        result = _git(["worktree", "remove", wt_path, "--force"], repo_root, timeout=15)
+        if result.returncode != 0:
+            logger.warning("Keeping worktree after failed removal: %s", wt_path)
+            _active_worktree = None
+            return
+    except Exception as exc:
+        logger.warning("Keeping worktree after failed removal: %s: %s", wt_path, exc)
+        _active_worktree = None
+        return
     _git_quiet(["branch", "-D", branch], repo_root, log=f"Failed to delete branch {branch}")
 
     _active_worktree = None
